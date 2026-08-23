@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         CoverVirtualScreen();
-        PositionFaceOnPrimaryMonitor();
+        PositionPrimaryMonitorRegion();
 
         // Layered is required for real transparency; start click-through so the overlay
         // never blocks whatever is underneath until the user explicitly asks to draw.
@@ -48,17 +48,34 @@ public partial class MainWindow : Window
             style | NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOOLWINDOW);
         SetClickThrough(true);
 
-        // Ctrl+Alt+D: toggle between pass-through and draw mode.
-        _toggleHotkey = new GlobalHotkey(this, HOTKEY_TOGGLE_DRAW,
-            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_D);
-        _toggleHotkey.Pressed += () => Dispatcher.Invoke(ToggleDrawMode);
+        // Hotkey registration can fail if another app already owns the exact combo. That
+        // must never take the whole overlay down with it -- surface it in the status text
+        // instead of throwing past this point and killing the window before it's visible.
+        try
+        {
+            // Ctrl+Alt+D: toggle between pass-through and draw mode.
+            _toggleHotkey = new GlobalHotkey(this, HOTKEY_TOGGLE_DRAW,
+                NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_D);
+            _toggleHotkey.Pressed += () => Dispatcher.Invoke(ToggleDrawMode);
+        }
+        catch (InvalidOperationException)
+        {
+            StatusText.Text = "Ctrl+Alt+D unavailable (in use by another app)";
+        }
 
-        // Ctrl+Alt+Q: hard kill switch. Always available, in every mode, no confirmation
-        // dialog to fight through -- an overlay that can eventually inject input needs an
-        // instant, unconditional way to shut it down.
-        _killHotkey = new GlobalHotkey(this, HOTKEY_KILL_SWITCH,
-            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_Q);
-        _killHotkey.Pressed += () => Dispatcher.Invoke(() => Application.Current.Shutdown());
+        try
+        {
+            // Ctrl+Alt+Q: hard kill switch. Always available, in every mode, no confirmation
+            // dialog to fight through -- an overlay that can eventually inject input needs an
+            // instant, unconditional way to shut it down.
+            _killHotkey = new GlobalHotkey(this, HOTKEY_KILL_SWITCH,
+                NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_Q);
+            _killHotkey.Pressed += () => Dispatcher.Invoke(() => Application.Current.Shutdown());
+        }
+        catch (InvalidOperationException)
+        {
+            StatusText.Text = "Ctrl+Alt+Q unavailable (in use by another app)";
+        }
 
         // Polls the real cursor position instead of using WPF mouse events, since this
         // window receives no mouse messages at all while click-through is active.
@@ -112,21 +129,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Places the face at the center of the primary monitor (Settings &gt; Display &gt; "1"),
-    /// not the center of the virtual desktop's bounding box -- on a multi-monitor setup
-    /// those only coincide with a symmetric arrangement. The primary monitor's top-left is
-    /// always desktop-absolute (0,0), so this window's own Left/Top (the virtual desktop's
-    /// top-left, possibly negative) gives the offset into this window's local coordinates.
+    /// Sizes and offsets <c>PrimaryMonitorRegion</c> to exactly cover the primary monitor
+    /// (Settings &gt; Display &gt; "1"), not the virtual desktop's full bounding box -- on a
+    /// multi-monitor setup those only coincide with a symmetric arrangement, and everything
+    /// anchored to the outer Grid could otherwise land on a different physical screen than
+    /// the one you're looking at. The primary monitor's top-left is always desktop-absolute
+    /// (0,0), so this window's own Left/Top (the virtual desktop's top-left, possibly
+    /// negative) gives the offset into this window's local coordinates.
     /// </summary>
-    private void PositionFaceOnPrimaryMonitor()
+    private void PositionPrimaryMonitorRegion()
     {
-        var primaryCenterX = SystemParameters.PrimaryScreenWidth / 2 - Left;
-        var primaryCenterY = SystemParameters.PrimaryScreenHeight / 2 - Top;
-
-        FaceContainer.Margin = new Thickness(
-            primaryCenterX - FaceContainer.Width / 2,
-            primaryCenterY - FaceContainer.Height / 2,
-            0, 0);
+        PrimaryMonitorRegion.Width = SystemParameters.PrimaryScreenWidth;
+        PrimaryMonitorRegion.Height = SystemParameters.PrimaryScreenHeight;
+        PrimaryMonitorRegion.Margin = new Thickness(-Left, -Top, 0, 0);
     }
 
     private void ToggleDrawMode() => SetClickThrough(clickThrough: _drawMode);

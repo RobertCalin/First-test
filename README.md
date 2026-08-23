@@ -20,14 +20,23 @@ Source: [`src/AgentOverlay`](src/AgentOverlay).
   again returns to click-through.
 - **Ctrl+Alt+Q** is a hard kill switch: quits the app instantly, in any mode,
   with no confirmation dialog to fight through.
-- A small always-visible status badge (top-right) shows which mode is active,
-  so the overlay's state is never invisible to you.
+- A small always-visible status badge (top-right of your **primary monitor**)
+  shows which mode is active, so the overlay's state is never invisible to
+  you.
 - An avatar face centered on your **primary monitor** (Settings > Display >
   the one marked "1"), with eyes that track the live mouse cursor across all
   monitors (polled via `GetCursorPos`, since click-through mode receives no
-  mouse events) -- a visible cue that the overlay is "watching." Its outline
-  color mirrors the status badge (gray = pass-through, green = draw mode).
-  Never hit-test visible, so it can't block clicks or drawing.
+  mouse events) -- a visible cue that the overlay is "watching." Opaque,
+  high-contrast fill with a drop shadow so it reads against any wallpaper.
+  Its outline color mirrors the status badge (gray = pass-through, green =
+  draw mode). Never hit-test visible, so it can't block clicks or drawing.
+  Both indicators are anchored inside a `PrimaryMonitorRegion` sub-grid that
+  code-behind sizes/offsets to the primary monitor specifically, since the
+  outer window spans the whole multi-monitor virtual desktop.
+- A global unhandled-exception handler (`App.xaml.cs`) shows an error dialog
+  instead of failing silently, and hotkey registration failures (e.g.
+  Ctrl+Alt+D already bound by another app) degrade to a status message
+  instead of crashing the app on startup.
 
 ### What's stubbed but not wired up
 
