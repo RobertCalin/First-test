@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 import cv2
-import mediapipe as mp
+
+# Imported as a direct submodule rather than accessed as mp.solutions.hands: on some
+# MediaPipe packaging/versions (observed on Windows), the top-level `mediapipe` module
+# doesn't expose `.solutions` as an attribute even though the underlying code is present,
+# raising AttributeError("module 'mediapipe' has no attribute 'solutions'") at the call
+# site. Importing the submodule directly routes around whatever's failing in that
+# top-level exposure.
+from mediapipe.python.solutions import hands as mp_hands
 from PySide6.QtCore import QThread, Signal
 
 
@@ -90,7 +97,7 @@ class HandTrackerThread(QThread):
                 self.failed.emit(f"Could not open camera index {self._camera_index}.")
                 return
 
-            hands = mp.solutions.hands.Hands(
+            hands = mp_hands.Hands(
                 model_complexity=0,
                 max_num_hands=1,
                 min_detection_confidence=0.6,
