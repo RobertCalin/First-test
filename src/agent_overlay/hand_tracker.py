@@ -77,19 +77,26 @@ class HandTrackerThread(QThread):
         self._camera_index = camera_index
 
     def run(self) -> None:
-        capture = cv2.VideoCapture(self._camera_index)
-        if not capture.isOpened():
-            self.failed.emit(f"Could not open camera index {self._camera_index}.")
-            return
-
-        hands = mp.solutions.hands.Hands(
-            model_complexity=0,
-            max_num_hands=1,
-            min_detection_confidence=0.6,
-            min_tracking_confidence=0.5,
-        )
-
+        # The whole body is wrapped, not just the frame loop: an exception from
+        # constructing VideoCapture/Hands is just as fatal to this thread as one from the
+        # loop, and letting it escape uncaught here doesn't get caught by Python at all --
+        # it crosses back into Qt/Shiboken's C++ call boundary, which can only report it
+        # as an opaque "Error calling Python override of QThread::run()" with no detail.
+        capture = None
+        hands = None
         try:
+            capture = cv2.VideoCapture(self._camera_index)
+            if not capture.isOpened():
+                self.failed.emit(f"Could not open camera index {self._camera_index}.")
+                return
+
+            hands = mp.solutions.hands.Hands(
+                model_complexity=0,
+                max_num_hands=1,
+                min_detection_confidence=0.6,
+                min_tracking_confidence=0.5,
+            )
+
             while not self.isInterruptionRequested():
                 ok, frame = capture.read()
                 if not ok:
@@ -112,10 +119,12 @@ class HandTrackerThread(QThread):
                 else:
                     self.frame_received.emit(HandFrame(False, HandGesture.NONE, 0.0, 0.0))
         except Exception as exc:  # noqa: BLE001 -- must never die silently on this thread
-            self.failed.emit(f"Hand tracker crashed: {exc}")
+            self.failed.emit(f"Hand tracker crashed: {exc!r}")
         finally:
-            hands.close()
-            capture.release()
+            if hands is not None:
+                hands.close()
+            if capture is not None:
+                capture.release()
 
     def stop(self) -> None:
         self.requestInterruption()
