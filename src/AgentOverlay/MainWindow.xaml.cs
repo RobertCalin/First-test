@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AgentOverlay.Native;
 
 namespace AgentOverlay;
@@ -14,8 +15,12 @@ public partial class MainWindow : Window
     private const int HOTKEY_TOGGLE_DRAW = 1;
     private const int HOTKEY_KILL_SWITCH = 2;
 
+    // How far the pupil can move from the eye's center, in device-independent pixels.
+    private const double PupilRange = 8.0;
+
     private GlobalHotkey? _toggleHotkey;
     private GlobalHotkey? _killHotkey;
+    private DispatcherTimer? _eyeTracker;
     private bool _drawMode;
 
     public MainWindow()
@@ -26,6 +31,7 @@ public partial class MainWindow : Window
         {
             _toggleHotkey?.Dispose();
             _killHotkey?.Dispose();
+            _eyeTracker?.Stop();
         };
     }
 
@@ -52,6 +58,44 @@ public partial class MainWindow : Window
         _killHotkey = new GlobalHotkey(this, HOTKEY_KILL_SWITCH,
             NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_Q);
         _killHotkey.Pressed += () => Dispatcher.Invoke(() => Application.Current.Shutdown());
+
+        // Polls the real cursor position instead of using WPF mouse events, since this
+        // window receives no mouse messages at all while click-through is active.
+        _eyeTracker = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16),
+        };
+        _eyeTracker.Tick += (_, _) => UpdateEyeLook();
+        _eyeTracker.Start();
+    }
+
+    /// <summary>Points both pupils toward the current mouse position.</summary>
+    private void UpdateEyeLook()
+    {
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        // GetCursorPos returns physical pixels; the window's own Left/Top/size are in
+        // device-independent pixels, so convert using this window's DPI scale factor.
+        // (Approximate on mixed-DPI multi-monitor setups -- acceptable for a visual cue.)
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var mouseInWindow = new Point(
+            cursor.X / dpi.DpiScaleX - Left,
+            cursor.Y / dpi.DpiScaleY - Top);
+
+        var faceCenter = FaceContainer.TranslatePoint(
+            new Point(FaceContainer.ActualWidth / 2, FaceContainer.ActualHeight / 2), this);
+
+        var angle = Math.Atan2(mouseInWindow.Y - faceCenter.Y, mouseInWindow.X - faceCenter.X);
+        var offsetX = Math.Cos(angle) * PupilRange;
+        var offsetY = Math.Sin(angle) * PupilRange;
+
+        LeftPupilTransform.X = offsetX;
+        LeftPupilTransform.Y = offsetY;
+        RightPupilTransform.X = offsetX;
+        RightPupilTransform.Y = offsetY;
     }
 
     /// <summary>
@@ -82,5 +126,6 @@ public partial class MainWindow : Window
         DrawSurface.IsHitTestVisible = _drawMode;
         StatusText.Text = _drawMode ? "Draw Mode (Ctrl+Alt+D to release)" : "Pass-through";
         StatusDot.Fill = _drawMode ? Brushes.LimeGreen : Brushes.Gray;
+        FaceHead.Stroke = _drawMode ? Brushes.LimeGreen : Brushes.Gray;
     }
 }

@@ -34,4 +34,16 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    // Polled instead of relying on WPF mouse events: in click-through mode the overlay
+    // never receives WM_MOUSEMOVE at all, so this is the only way to track the cursor.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetCursorPos(out POINT lpPoint);
 }

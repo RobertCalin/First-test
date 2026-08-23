@@ -18,6 +18,30 @@
                    Background="Transparent"
                    EditingMode="Ink" />
 
+        <!-- Avatar face, centered, eyes tracking the live mouse position (see
+             MainWindow.xaml.cs). Purely visual feedback that the agent is "watching" --
+             never hit-test visible, so it can never block clicks or drawing. -->
+        <Grid x:Name="FaceContainer"
+              Width="140" Height="140"
+              HorizontalAlignment="Center" VerticalAlignment="Center"
+              IsHitTestVisible="False">
+            <Ellipse x:Name="FaceHead" Fill="#DD2B2B33" Stroke="Gray" StrokeThickness="2"/>
+            <Canvas>
+                <Ellipse Width="34" Height="34" Fill="White" Canvas.Left="28" Canvas.Top="55"/>
+                <Ellipse Width="14" Height="14" Fill="#202020" Canvas.Left="35" Canvas.Top="62">
+                    <Ellipse.RenderTransform>
+                        <TranslateTransform x:Name="LeftPupilTransform"/>
+                    </Ellipse.RenderTransform>
+                </Ellipse>
+                <Ellipse Width="34" Height="34" Fill="White" Canvas.Left="78" Canvas.Top="55"/>
+                <Ellipse Width="14" Height="14" Fill="#202020" Canvas.Left="85" Canvas.Top="62">
+                    <Ellipse.RenderTransform>
+                        <TranslateTransform x:Name="RightPupilTransform"/>
+                    </Ellipse.RenderTransform>
+                </Ellipse>
+            </Canvas>
+        </Grid>
+
         <!-- Always-visible mode indicator, pinned top-right. Small and unobtrusive but
              deliberately never hidden: an invisible overlay whose input mode you can't
              see is a trap, both for usability and for safety. -->
