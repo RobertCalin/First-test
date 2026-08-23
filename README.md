@@ -43,7 +43,8 @@ hand-tracking piece) lives in one runtime/language instead of two.
   mapped to the whole screen. Re-arming (toggle off, then on) re-calibrates
   from scratch. Once calibration finishes:
   - Your index fingertip's position drives the cursor.
-  - Pinching (thumb + index finger together) performs a click.
+  - Pinching (thumb + index finger together) performs a click, and the
+    avatar face's eyes blink briefly as visual feedback that it registered.
   - Two small badges stacked below the status badge show live feedback:
     **Movement** (`Up`/`Down`/`Left`/`Right`/`Still`, classified from
     frame-to-frame fingertip position) and **Action** (the current gesture:

@@ -42,6 +42,10 @@ COLOR_DRAW_MODE = QColor(0x32, 0xCD, 0x32)  # LimeGreen
 COLOR_HAND_CONTROL = QColor(0x00, 0xFF, 0xFF)  # Cyan
 COLOR_ERROR = QColor(0xFF, 0x45, 0x00)  # OrangeRed
 
+# How long the face's eyes stay drawn closed after a click, as visual feedback that a
+# pinch registered.
+BLINK_DURATION = 0.15
+
 # Frame-to-frame fingertip movement smaller than this (normalized camera-space fraction)
 # reads as noise, not an intentional direction -- tune up if the label flickers between
 # directions while your hand is basically still, or down if small moves aren't registering.
@@ -95,6 +99,7 @@ class OverlayWindow(QWidget):
         self._status_text = "Pass-through"
         self._status_color = COLOR_PASS_THROUGH
         self._pupil_offset = QPointF(0, 0)
+        self._blink_until = 0.0
         self._prev_hand_pos: QPointF | None = None
         self._movement_label = "—"  # em dash placeholder while no hand is tracked
         self._action_label = "—"
@@ -320,6 +325,7 @@ class OverlayWindow(QWidget):
         is_pinching = frame.gesture == HandGesture.PINCH
         if is_pinching and not self._was_pinching:
             input_injector.click_at(x, y)
+            self._blink_until = time.monotonic() + BLINK_DURATION
         self._was_pinching = is_pinching
 
     # ---- mode visuals ---------------------------------------------------------
@@ -390,8 +396,20 @@ class OverlayWindow(QWidget):
         painter.setPen(QPen(self._status_color, 3))
         painter.drawEllipse(rect)
 
+        blinking = time.monotonic() < self._blink_until
+
         for side in (-1, 1):
             eye_center = QPointF(center.x() + side * EYE_OFFSET_X, center.y() + EYE_OFFSET_Y)
+
+            if blinking:
+                # Closed eye: a single line instead of the open eye/pupil, as feedback
+                # that a pinch was just registered as a click.
+                painter.setPen(QPen(QColor(0x20, 0x20, 0x20), 3, Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(
+                    QPointF(eye_center.x() - EYE_RADIUS, eye_center.y()),
+                    QPointF(eye_center.x() + EYE_RADIUS, eye_center.y()),
+                )
+                continue
 
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor("white")))
