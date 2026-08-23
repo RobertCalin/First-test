@@ -42,12 +42,17 @@ hand-tracking piece) lives in one runtime/language instead of two.
   it down) so that range -- not the camera's full field of view -- gets
   mapped to the whole screen. Re-arming (toggle off, then on) re-calibrates
   from scratch. Once calibration finishes:
-  - Your index fingertip's position drives the cursor.
+  - Your palm's position (the middle-finger MCP joint, not the fingertip --
+    the fingertip moves too much as part of curling into a pinch/fist,
+    which was making the cursor drift during those gestures) drives the
+    cursor.
   - Pinching (thumb + index finger together) performs a click, and the
     avatar face's eyes blink briefly as visual feedback that it registered.
+    The cursor freezes in place for the duration of the pinch so the click
+    can't drag it.
   - Two small badges stacked below the status badge show live feedback:
     **Movement** (`Up`/`Down`/`Left`/`Right`/`Still`, classified from
-    frame-to-frame fingertip position) and **Action** (the current gesture:
+    frame-to-frame palm position) and **Action** (the current gesture:
     `Point`/`Pinch`/`Fist`/`Open`/`None`).
   - `fist` and `open_palm` are detected and shown in the Action label but
     not yet bound to a control action.

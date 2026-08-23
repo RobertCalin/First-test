@@ -101,6 +101,7 @@ class OverlayWindow(QWidget):
         self._pupil_offset = QPointF(0, 0)
         self._blink_until = 0.0
         self._prev_hand_pos: QPointF | None = None
+        self._last_screen_pos: tuple[int, int] | None = None
         self._movement_label = "—"  # em dash placeholder while no hand is tracked
         self._action_label = "—"
         self._calibrating = False
@@ -209,6 +210,7 @@ class OverlayWindow(QWidget):
                 self._hand_tracker = None
             self._was_pinching = False
             self._prev_hand_pos = None
+            self._last_screen_pos = None
             self._movement_label = "—"
             self._action_label = "—"
             self._calibrating = False
@@ -256,6 +258,7 @@ class OverlayWindow(QWidget):
         self._hand_control_enabled = False
         self._was_pinching = False
         self._prev_hand_pos = None
+        self._last_screen_pos = None
         self._movement_label = "—"
         self._action_label = "—"
         self._calibrating = False
@@ -275,6 +278,7 @@ class OverlayWindow(QWidget):
         if not frame.hand_present:
             self._was_pinching = False
             self._prev_hand_pos = None
+            self._last_screen_pos = None
             self._movement_label = "—"
             self._action_label = "—"
             return
@@ -302,29 +306,36 @@ class OverlayWindow(QWidget):
             self.update()
             return  # no cursor movement or gesture handling while calibrating
 
-        current_pos = QPointF(mirrored_x, frame.cursor_y)
-        if self._prev_hand_pos is not None:
-            dx = current_pos.x() - self._prev_hand_pos.x()
-            dy = current_pos.y() - self._prev_hand_pos.y()
-            self._movement_label = _classify_movement(dx, dy)
-        self._prev_hand_pos = current_pos
         self._action_label = GESTURE_LABELS[frame.gesture]
-
-        # Mapped through the calibrated range (see _finish_calibration), not the raw 0..1
-        # camera frame -- so your comfortable range of motion covers the whole screen
-        # instead of requiring your hand to reach the physical edges of the camera's view.
-        mapped_x = _remap(mirrored_x, self._calib_x_range)
-        mapped_y = _remap(frame.cursor_y, self._calib_y_range)
-
-        primary = QGuiApplication.primaryScreen().geometry()
-        x = primary.left() + int(mapped_x * primary.width())
-        y = primary.top() + int(mapped_y * primary.height())
-
-        input_injector.move_to(x, y)
-
         is_pinching = frame.gesture == HandGesture.PINCH
-        if is_pinching and not self._was_pinching:
-            input_injector.click_at(x, y)
+
+        # Freeze the cursor while pinching: even tracking a stable palm anchor (see
+        # HandFrame docstring), closing thumb+index still tenses/shifts the hand slightly,
+        # which was dragging the cursor right as a click fired. Position tracking only
+        # runs on non-pinch frames; a click reuses the last position recorded beforehand.
+        if not is_pinching:
+            current_pos = QPointF(mirrored_x, frame.cursor_y)
+            if self._prev_hand_pos is not None:
+                dx = current_pos.x() - self._prev_hand_pos.x()
+                dy = current_pos.y() - self._prev_hand_pos.y()
+                self._movement_label = _classify_movement(dx, dy)
+            self._prev_hand_pos = current_pos
+
+            # Mapped through the calibrated range (see _finish_calibration), not the raw
+            # 0..1 camera frame -- so your comfortable range of motion covers the whole
+            # screen instead of requiring your hand to reach the camera's physical edges.
+            mapped_x = _remap(mirrored_x, self._calib_x_range)
+            mapped_y = _remap(frame.cursor_y, self._calib_y_range)
+
+            primary = QGuiApplication.primaryScreen().geometry()
+            self._last_screen_pos = (
+                primary.left() + int(mapped_x * primary.width()),
+                primary.top() + int(mapped_y * primary.height()),
+            )
+            input_injector.move_to(*self._last_screen_pos)
+
+        if is_pinching and not self._was_pinching and self._last_screen_pos is not None:
+            input_injector.click_at(*self._last_screen_pos)
             self._blink_until = time.monotonic() + BLINK_DURATION
         self._was_pinching = is_pinching
 

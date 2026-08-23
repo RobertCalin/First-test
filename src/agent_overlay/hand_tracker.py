@@ -38,10 +38,15 @@ class HandGesture(Enum):
 
 @dataclass(frozen=True)
 class HandFrame:
-    """cursor_x/y are the index fingertip's position in normalized camera-space
-    coordinates (0..1), in the camera's native (unmirrored) left-right orientation --
-    a caller mapping this to screen coordinates for a front-facing webcam should mirror
-    x so "move your hand right" moves the cursor right."""
+    """cursor_x/y are the position of the middle-finger MCP joint (landmark 9 -- roughly
+    the center of the palm) in normalized camera-space coordinates (0..1), in the
+    camera's native (unmirrored) left-right orientation -- a caller mapping this to
+    screen coordinates for a front-facing webcam should mirror x so "move your hand
+    right" moves the cursor right.
+
+    Deliberately not the index fingertip: that point moves a lot as part of curling
+    fingers into a pinch or fist, which made the cursor visibly drift during those
+    gestures. The palm-base joint stays comparatively still across all of them."""
 
     hand_present: bool
     gesture: HandGesture
@@ -144,13 +149,13 @@ class HandTrackerThread(QThread):
 
                 if result.hand_landmarks:
                     landmarks = result.hand_landmarks[0]
-                    index_tip = landmarks[8]
+                    palm_anchor = landmarks[9]  # middle-finger MCP; see HandFrame docstring
                     self.frame_received.emit(
                         HandFrame(
                             hand_present=True,
                             gesture=_classify_gesture(landmarks),
-                            cursor_x=index_tip.x,
-                            cursor_y=index_tip.y,
+                            cursor_x=palm_anchor.x,
+                            cursor_y=palm_anchor.y,
                         )
                     )
                 else:
