@@ -1,24 +1,31 @@
 """Watches the webcam and emits one HandFrame per frame via Qt signals, on a background
 thread so the ~30fps capture-and-inference loop never blocks the UI. Hand landmark
-detection is delegated to Google's MediaPipe Hands, which ships its own pretrained
-model -- no separate model file to source, just `pip install mediapipe opencv-python`.
+detection is delegated to Google's MediaPipe Tasks HandLandmarker.
+
+Unlike the older, now-removed "Solutions" API (mp.solutions.hands), Tasks does not bundle
+its model inside the pip package -- it needs a separate .task model file. _ensure_model()
+below downloads it once from Google's public model zoo and caches it locally, so this
+still doesn't require the user to source or manage a model file by hand.
 """
 
 from __future__ import annotations
 
+import urllib.request
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 
 import cv2
-
-# Imported as a direct submodule rather than accessed as mp.solutions.hands: on some
-# MediaPipe packaging/versions (observed on Windows), the top-level `mediapipe` module
-# doesn't expose `.solutions` as an attribute even though the underlying code is present,
-# raising AttributeError("module 'mediapipe' has no attribute 'solutions'") at the call
-# site. Importing the submodule directly routes around whatever's failing in that
-# top-level exposure.
-from mediapipe.python.solutions import hands as mp_hands
+import mediapipe as mp
+from mediapipe.tasks import python as mp_tasks
+from mediapipe.tasks.python import vision as mp_vision
 from PySide6.QtCore import QThread, Signal
+
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
+_MODEL_PATH = Path(__file__).parent / "models" / "hand_landmarker.task"
 
 
 class HandGesture(Enum):
@@ -40,6 +47,17 @@ class HandFrame:
     gesture: HandGesture
     cursor_x: float
     cursor_y: float
+
+
+def _ensure_model() -> Path:
+    """Downloads the hand landmark model to a local cache on first use. Runs on the
+    tracker's background thread, so a slow/blocked download doesn't freeze the UI --
+    it just delays hand control coming online, same as any other startup wait."""
+    if _MODEL_PATH.exists():
+        return _MODEL_PATH
+    _MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    return _MODEL_PATH
 
 
 def _distance(a, b) -> float:
@@ -84,25 +102,36 @@ class HandTrackerThread(QThread):
         self._camera_index = camera_index
 
     def run(self) -> None:
-        # The whole body is wrapped, not just the frame loop: an exception from
-        # constructing VideoCapture/Hands is just as fatal to this thread as one from the
-        # loop, and letting it escape uncaught here doesn't get caught by Python at all --
-        # it crosses back into Qt/Shiboken's C++ call boundary, which can only report it
-        # as an opaque "Error calling Python override of QThread::run()" with no detail.
+        # The whole body is wrapped, not just the frame loop: an exception from setup
+        # (model download, VideoCapture, HandLandmarker) is just as fatal to this thread
+        # as one from the loop, and letting it escape uncaught here doesn't get caught by
+        # Python at all -- it crosses back into Qt/Shiboken's C++ call boundary, which can
+        # only report it as an opaque "Error calling Python override of QThread::run()".
         capture = None
-        hands = None
+        landmarker = None
         try:
+            try:
+                model_path = _ensure_model()
+            except Exception as exc:
+                self.failed.emit(
+                    f"Could not download hand-tracking model ({exc!r}). Download it "
+                    f"manually from {_MODEL_URL} and save it to {_MODEL_PATH}."
+                )
+                return
+
             capture = cv2.VideoCapture(self._camera_index)
             if not capture.isOpened():
                 self.failed.emit(f"Could not open camera index {self._camera_index}.")
                 return
 
-            hands = mp_hands.Hands(
-                model_complexity=0,
-                max_num_hands=1,
-                min_detection_confidence=0.6,
+            options = mp_vision.HandLandmarkerOptions(
+                base_options=mp_tasks.BaseOptions(model_asset_path=str(model_path)),
+                running_mode=mp_vision.RunningMode.IMAGE,
+                num_hands=1,
+                min_hand_detection_confidence=0.6,
                 min_tracking_confidence=0.5,
             )
+            landmarker = mp_vision.HandLandmarker.create_from_options(options)
 
             while not self.isInterruptionRequested():
                 ok, frame = capture.read()
@@ -110,10 +139,11 @@ class HandTrackerThread(QThread):
                     continue
 
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result = hands.process(frame_rgb)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                result = landmarker.detect(mp_image)
 
-                if result.multi_hand_landmarks:
-                    landmarks = result.multi_hand_landmarks[0].landmark
+                if result.hand_landmarks:
+                    landmarks = result.hand_landmarks[0]
                     index_tip = landmarks[8]
                     self.frame_received.emit(
                         HandFrame(
@@ -128,8 +158,8 @@ class HandTrackerThread(QThread):
         except Exception as exc:  # noqa: BLE001 -- must never die silently on this thread
             self.failed.emit(f"Hand tracker crashed: {exc!r}")
         finally:
-            if hands is not None:
-                hands.close()
+            if landmarker is not None:
+                landmarker.close()
             if capture is not None:
                 capture.release()
 

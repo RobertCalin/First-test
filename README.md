@@ -43,9 +43,11 @@ hand-tracking piece) lives in one runtime/language instead of two.
   - `fist` and `open_palm` are detected and available in the event data but
     not yet bound to an action.
   - Hand tracking (`hand_tracker.py`) runs on a background thread using
-    Google's MediaPipe Hands, which ships its own pretrained model -- no
-    separate model file to source. Unlike the old C# version, this now runs
-    in-process rather than as a subprocess talking over stdout.
+    Google's MediaPipe Tasks HandLandmarker. Unlike the old C# version, this
+    now runs in-process rather than as a subprocess talking over stdout. The
+    model file (~10MB) isn't bundled in the pip package -- it's downloaded
+    automatically to `src/agent_overlay/models/` the first time you arm hand
+    control, and cached there after that.
 
 ### What's stubbed but not wired up
 
