@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AgentOverlay.Gesture;
+using AgentOverlay.Input;
 using AgentOverlay.Native;
 
 namespace AgentOverlay;
@@ -11,17 +13,23 @@ public partial class MainWindow : Window
     // Virtual-key codes for the hotkey combos below (see WinUser.h VK_* constants).
     private const uint VK_D = 0x44;
     private const uint VK_Q = 0x51;
+    private const uint VK_H = 0x48;
 
     private const int HOTKEY_TOGGLE_DRAW = 1;
     private const int HOTKEY_KILL_SWITCH = 2;
+    private const int HOTKEY_TOGGLE_HANDS = 3;
 
     // How far the pupil can move from the eye's center, in device-independent pixels.
     private const double PupilRange = 8.0;
 
     private GlobalHotkey? _toggleHotkey;
     private GlobalHotkey? _killHotkey;
+    private GlobalHotkey? _handsHotkey;
     private DispatcherTimer? _eyeTracker;
+    private readonly IHandTracker _handTracker = new PythonHandTracker();
     private bool _drawMode;
+    private bool _handControlEnabled;
+    private bool _wasPinching;
 
     public MainWindow()
     {
@@ -31,7 +39,9 @@ public partial class MainWindow : Window
         {
             _toggleHotkey?.Dispose();
             _killHotkey?.Dispose();
+            _handsHotkey?.Dispose();
             _eyeTracker?.Stop();
+            _handTracker.Dispose();
         };
     }
 
@@ -76,6 +86,30 @@ public partial class MainWindow : Window
         {
             StatusText.Text = "Ctrl+Alt+Q unavailable (in use by another app)";
         }
+
+        try
+        {
+            // Ctrl+Alt+H: arm/disarm hand-gesture mouse control. Off by default -- a
+            // webcam pointed at you should never start moving your mouse without an
+            // explicit, deliberate opt-in.
+            _handsHotkey = new GlobalHotkey(this, HOTKEY_TOGGLE_HANDS,
+                NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, VK_H);
+            _handsHotkey.Pressed += () => Dispatcher.Invoke(ToggleHandControl);
+        }
+        catch (InvalidOperationException)
+        {
+            StatusText.Text = "Ctrl+Alt+H unavailable (in use by another app)";
+        }
+
+        _handTracker.FrameReceived += frame => Dispatcher.Invoke(() => OnHandFrame(frame));
+        _handTracker.Failed += message => Dispatcher.Invoke(() =>
+        {
+            _handControlEnabled = false;
+            _wasPinching = false;
+            StatusText.Text = $"Hand tracker: {message}";
+            StatusDot.Fill = Brushes.OrangeRed;
+            FaceHead.Stroke = Brushes.OrangeRed;
+        });
 
         // Polls the real cursor position instead of using WPF mouse events, since this
         // window receives no mouse messages at all while click-through is active.
@@ -158,8 +192,95 @@ public partial class MainWindow : Window
         NativeMethods.SetWindowLong(handle, NativeMethods.GWL_EXSTYLE, style);
 
         DrawSurface.IsHitTestVisible = _drawMode;
-        StatusText.Text = _drawMode ? "Draw Mode (Ctrl+Alt+D to release)" : "Pass-through";
-        StatusDot.Fill = _drawMode ? Brushes.LimeGreen : Brushes.Gray;
-        FaceHead.Stroke = _drawMode ? Brushes.LimeGreen : Brushes.Gray;
+        UpdateModeVisuals();
+    }
+
+    /// <summary>
+    /// Arms or disarms live hand-gesture mouse control: while armed, the index fingertip's
+    /// position drives the cursor and a pinch performs a click (see OnHandFrame). Starts/stops
+    /// the Python hand_tracker.py process alongside the toggle, so the webcam is only ever in
+    /// use while this is explicitly on.
+    /// </summary>
+    private void ToggleHandControl()
+    {
+        _handControlEnabled = !_handControlEnabled;
+
+        if (_handControlEnabled)
+        {
+            _handTracker.Start();
+            // _handTracker.Failed can fire synchronously from within Start() (e.g. Python
+            // isn't on PATH) and flips _handControlEnabled back off with its own status
+            // message -- only overwrite that with the generic "on" visuals if it didn't.
+            if (_handControlEnabled)
+            {
+                UpdateModeVisuals();
+            }
+        }
+        else
+        {
+            _handTracker.Stop();
+            _wasPinching = false;
+            UpdateModeVisuals();
+        }
+    }
+
+    /// <summary>
+    /// Turns one hand-tracking frame into cursor movement and, on a pinch, a click. This is
+    /// the only place gestures reach Input.InputInjector -- nothing here runs unless hand
+    /// control was explicitly armed via Ctrl+Alt+H.
+    /// </summary>
+    private void OnHandFrame(HandFrame frame)
+    {
+        if (!_handControlEnabled)
+        {
+            return;
+        }
+
+        if (!frame.HandPresent)
+        {
+            _wasPinching = false;
+            return;
+        }
+
+        // Mirror X: moving your hand to your right, as you face the camera, should move
+        // the cursor right on screen -- matching a mirror/selfie view, not the raw frame.
+        var mirroredX = 1.0 - frame.CursorX;
+
+        var screenWidth = SystemParameters.PrimaryScreenWidth;
+        var screenHeight = SystemParameters.PrimaryScreenHeight;
+        var x = (int)Math.Clamp(mirroredX * screenWidth, 0, screenWidth - 1);
+        var y = (int)Math.Clamp(frame.CursorY * screenHeight, 0, screenHeight - 1);
+
+        InputInjector.MoveTo(x, y);
+
+        var isPinching = frame.Gesture == HandGesture.Pinch;
+        if (isPinching && !_wasPinching)
+        {
+            InputInjector.ClickAt(x, y);
+        }
+        _wasPinching = isPinching;
+    }
+
+    /// <summary>Single source of truth for the status badge and face outline color/text.</summary>
+    private void UpdateModeVisuals()
+    {
+        if (_handControlEnabled)
+        {
+            StatusText.Text = "Hand Control ON (Ctrl+Alt+H to stop)";
+            StatusDot.Fill = Brushes.Cyan;
+            FaceHead.Stroke = Brushes.Cyan;
+        }
+        else if (_drawMode)
+        {
+            StatusText.Text = "Draw Mode (Ctrl+Alt+D to release)";
+            StatusDot.Fill = Brushes.LimeGreen;
+            FaceHead.Stroke = Brushes.LimeGreen;
+        }
+        else
+        {
+            StatusText.Text = "Pass-through";
+            StatusDot.Fill = Brushes.Gray;
+            FaceHead.Stroke = Brushes.Gray;
+        }
     }
 }

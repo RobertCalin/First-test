@@ -37,15 +37,29 @@ Source: [`src/AgentOverlay`](src/AgentOverlay).
   instead of failing silently, and hotkey registration failures (e.g.
   Ctrl+Alt+D already bound by another app) degrade to a status message
   instead of crashing the app on startup.
+- **Hand-gesture mouse control**, armed/disarmed with **Ctrl+Alt+H** (off by
+  default -- a webcam pointed at you should never move your mouse without
+  explicit opt-in). While armed:
+  - Your index fingertip's position drives the cursor.
+  - Pinching (thumb + index finger together) performs a click.
+  - `Fist` and `open_palm` are detected and available in the event data but
+    not yet bound to an action.
+  - Hand tracking is delegated to
+    [`Gesture/hand_tracker.py`](src/AgentOverlay/Gesture/hand_tracker.py), a
+    small Python script using Google's MediaPipe Hands (which ships its own
+    pretrained model -- no separate model file to source). `PythonHandTracker`
+    launches it as a subprocess only while hand control is armed, and stops
+    it (releasing the webcam) the moment you disarm or quit. See **Running
+    hand-gesture control** below for the extra setup this needs.
 
 ### What's stubbed but not wired up
 
 These exist as clean, isolated modules so the architecture is in place, but
-none of them are connected to anything yet -- no automatic decision-making or
-input injection happens just because the app is running:
+none of them are connected to anything automatically:
 
-- `Input/InputInjector.cs` -- synthesizes mouse moves/clicks and keyboard text
-  via `SendInput`. The agent's "hands." Callable manually, not auto-invoked.
+- `Input/InputInjector.cs` -- synthesizes mouse moves/clicks and keyboard
+  text via `SendInput`. The agent's "hands." Now used by hand-gesture control
+  above; still not auto-invoked by anything else.
 - `Voice/VoiceListener.cs` -- interface for speech-to-text; the choice between
   an offline engine (e.g. Whisper) and a cloud STT API is deferred.
 - `Agent/IAgentBrain.cs` -- the decision loop interface (screenshot + voice
@@ -63,6 +77,9 @@ input injection happens just because the app is running:
 4. A confirmation/logging layer between the brain's decisions and
    `InputInjector` actually executing them, especially for anything
    destructive (submitting forms, deleting, sending messages).
+5. Bind `fist`/`open_palm` gestures to additional actions (e.g. drag, or
+   toggling pass-through), and smooth/debounce the cursor position -- it
+   currently follows the raw fingertip position 1:1, which will feel jittery.
 
 ### Building and running
 
@@ -75,3 +92,25 @@ dotnet run
 
 There is no Linux/macOS build target -- this project is intentionally
 Windows-specific (layered windows, `SendInput`, global hotkeys are all Win32).
+
+### Running hand-gesture control
+
+Hand tracking needs Python in addition to .NET, since it shells out to
+`Gesture/hand_tracker.py`:
+
+1. Install Python 3.9-3.12 from https://python.org (MediaPipe doesn't yet
+   support the very latest Python release -- check MediaPipe's PyPI page if
+   `pip install` fails on a brand-new Python version). Make sure "Add
+   python.exe to PATH" is checked during install.
+2. Install the two packages it needs:
+   ```
+   pip install -r src/AgentOverlay/Gesture/requirements.txt
+   ```
+3. Run the app as usual (`dotnet run`) and press **Ctrl+Alt+H**. The status
+   badge will say "Hand Control ON" once the webcam feed is flowing; if
+   Python or a package is missing, it'll show the specific error instead
+   (e.g. "Could not launch 'python' ... Is Python installed and on PATH?").
+
+You can also run `python src/AgentOverlay/Gesture/hand_tracker.py` directly
+to sanity-check the tracker on its own -- it prints one JSON line per frame
+to the terminal (Ctrl+C to stop).

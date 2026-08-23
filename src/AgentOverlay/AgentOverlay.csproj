@@ -11,4 +11,11 @@
     <RootNamespace>AgentOverlay</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- PythonHandTracker locates this next to the built exe via AppContext.BaseDirectory. -->
+    <None Include="Gesture\hand_tracker.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
