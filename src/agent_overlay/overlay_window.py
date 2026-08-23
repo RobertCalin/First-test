@@ -6,6 +6,7 @@ input-mode toggling (draw / hand-control / pass-through).
 from __future__ import annotations
 
 import math
+import time
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
 from PySide6.QtGui import (
@@ -46,6 +47,15 @@ COLOR_ERROR = QColor(0xFF, 0x45, 0x00)  # OrangeRed
 # directions while your hand is basically still, or down if small moves aren't registering.
 MOVEMENT_DEADZONE = 0.015
 
+# How long, in seconds, arming hand control spends recording your comfortable range of
+# motion before switching to active control.
+CALIBRATION_SECONDS = 4.0
+
+# Floor on the observed calibration range (normalized units) -- without this, someone who
+# barely moves their hand during calibration would end up with a near-zero-width range,
+# making the mapped cursor movement absurdly (possibly divide-by-near-zero) sensitive.
+MIN_CALIBRATION_SPAN = 0.08
+
 GESTURE_LABELS = {
     HandGesture.NONE: "None",
     HandGesture.POINT: "Point",
@@ -61,6 +71,13 @@ def _classify_movement(dx: float, dy: float) -> str:
     if abs(dx) > abs(dy):
         return "Right" if dx > 0 else "Left"
     return "Down" if dy > 0 else "Up"
+
+
+def _remap(value: float, span: tuple[float, float]) -> float:
+    """Rescales value from the calibrated [lo, hi] range to [0, 1], clamped -- lo/hi are
+    guaranteed at least MIN_CALIBRATION_SPAN apart by _finish_calibration()."""
+    lo, hi = span
+    return _clamp01((value - lo) / (hi - lo))
 
 
 class OverlayWindow(QWidget):
@@ -81,6 +98,12 @@ class OverlayWindow(QWidget):
         self._prev_hand_pos: QPointF | None = None
         self._movement_label = "—"  # em dash placeholder while no hand is tracked
         self._action_label = "—"
+        self._calibrating = False
+        self._calib_start = 0.0
+        self._calib_min_x = self._calib_min_y = 1.0
+        self._calib_max_x = self._calib_max_y = 0.0
+        self._calib_x_range = (0.0, 1.0)
+        self._calib_y_range = (0.0, 1.0)
         self._strokes: list[list[QPointF]] = []
         self._current_stroke: list[QPointF] | None = None
 
@@ -174,16 +197,55 @@ class OverlayWindow(QWidget):
             self._hand_tracker.frame_received.connect(self._on_hand_frame)
             self._hand_tracker.failed.connect(self._on_hand_tracker_failed)
             self._hand_tracker.start()
-        elif self._hand_tracker is not None:
-            self._hand_tracker.stop()
-            self._hand_tracker = None
+            self._start_calibration()
+        else:
+            if self._hand_tracker is not None:
+                self._hand_tracker.stop()
+                self._hand_tracker = None
             self._was_pinching = False
             self._prev_hand_pos = None
             self._movement_label = "—"
             self._action_label = "—"
+            self._calibrating = False
+            self._update_mode_visuals()
 
-        self._update_mode_visuals()
         self.update()
+
+    def _start_calibration(self) -> None:
+        """Every arm re-calibrates from scratch (toggle off/on again to redo it): records
+        the range of hand positions seen over CALIBRATION_SECONDS so normal tracking can
+        map your comfortable range of motion to the full screen, rather than requiring you
+        to swing your hand to the physical edges of the camera's frame to reach the screen
+        edges. Sets status text directly (not via _update_mode_visuals()) since this is a
+        distinct sub-state of "hand control on" that needs its own message."""
+        self._calibrating = True
+        self._calib_start = time.monotonic()
+        self._calib_min_x = self._calib_min_y = 1.0
+        self._calib_max_x = self._calib_max_y = 0.0
+        self._movement_label = "—"
+        self._action_label = "—"
+        self._status_text = (
+            f"Calibrating... move your hand around your comfortable range ({CALIBRATION_SECONDS:.0f}s)"
+        )
+        self._status_color = COLOR_HAND_CONTROL
+
+    def _finish_calibration(self) -> None:
+        x_span = self._calib_max_x - self._calib_min_x
+        if x_span < MIN_CALIBRATION_SPAN:
+            center = (self._calib_min_x + self._calib_max_x) / 2
+            self._calib_min_x = center - MIN_CALIBRATION_SPAN / 2
+            self._calib_max_x = center + MIN_CALIBRATION_SPAN / 2
+
+        y_span = self._calib_max_y - self._calib_min_y
+        if y_span < MIN_CALIBRATION_SPAN:
+            center = (self._calib_min_y + self._calib_max_y) / 2
+            self._calib_min_y = center - MIN_CALIBRATION_SPAN / 2
+            self._calib_max_y = center + MIN_CALIBRATION_SPAN / 2
+
+        self._calib_x_range = (self._calib_min_x, self._calib_max_x)
+        self._calib_y_range = (self._calib_min_y, self._calib_max_y)
+        self._calibrating = False
+        self._update_mode_visuals()
 
     def _on_hand_tracker_failed(self, message: str) -> None:
         self._hand_control_enabled = False
@@ -191,6 +253,7 @@ class OverlayWindow(QWidget):
         self._prev_hand_pos = None
         self._movement_label = "—"
         self._action_label = "—"
+        self._calibrating = False
         if self._hand_tracker is not None:
             self._hand_tracker.stop()
             self._hand_tracker = None
@@ -216,8 +279,25 @@ class OverlayWindow(QWidget):
         # The movement label is classified in this same mirrored space so "Right" means
         # what it visually looks like, not the raw unmirrored camera frame.
         mirrored_x = 1.0 - frame.cursor_x
-        current_pos = QPointF(mirrored_x, frame.cursor_y)
 
+        if self._calibrating:
+            self._calib_min_x = min(self._calib_min_x, mirrored_x)
+            self._calib_max_x = max(self._calib_max_x, mirrored_x)
+            self._calib_min_y = min(self._calib_min_y, frame.cursor_y)
+            self._calib_max_y = max(self._calib_max_y, frame.cursor_y)
+
+            remaining = CALIBRATION_SECONDS - (time.monotonic() - self._calib_start)
+            if remaining <= 0:
+                self._finish_calibration()
+            else:
+                self._status_text = (
+                    f"Calibrating... move your hand around your comfortable range "
+                    f"({remaining:.0f}s)"
+                )
+            self.update()
+            return  # no cursor movement or gesture handling while calibrating
+
+        current_pos = QPointF(mirrored_x, frame.cursor_y)
         if self._prev_hand_pos is not None:
             dx = current_pos.x() - self._prev_hand_pos.x()
             dy = current_pos.y() - self._prev_hand_pos.y()
@@ -225,9 +305,15 @@ class OverlayWindow(QWidget):
         self._prev_hand_pos = current_pos
         self._action_label = GESTURE_LABELS[frame.gesture]
 
+        # Mapped through the calibrated range (see _finish_calibration), not the raw 0..1
+        # camera frame -- so your comfortable range of motion covers the whole screen
+        # instead of requiring your hand to reach the physical edges of the camera's view.
+        mapped_x = _remap(mirrored_x, self._calib_x_range)
+        mapped_y = _remap(frame.cursor_y, self._calib_y_range)
+
         primary = QGuiApplication.primaryScreen().geometry()
-        x = primary.left() + int(_clamp01(mirrored_x) * primary.width())
-        y = primary.top() + int(_clamp01(frame.cursor_y) * primary.height())
+        x = primary.left() + int(mapped_x * primary.width())
+        y = primary.top() + int(mapped_y * primary.height())
 
         input_injector.move_to(x, y)
 

@@ -37,7 +37,11 @@ hand-tracking piece) lives in one runtime/language instead of two.
   another app) degrade to a status message instead of crashing on startup.
 - **Hand-gesture mouse control**, armed/disarmed with **Ctrl+Alt+H** (off by
   default -- a webcam pointed at you should never move your mouse without
-  explicit opt-in). While armed:
+  explicit opt-in). Arming it starts with a **4-second calibration**: move
+  your hand around your comfortable range of motion (the status badge counts
+  it down) so that range -- not the camera's full field of view -- gets
+  mapped to the whole screen. Re-arming (toggle off, then on) re-calibrates
+  from scratch. Once calibration finishes:
   - Your index fingertip's position drives the cursor.
   - Pinching (thumb + index finger together) performs a click.
   - Two small badges stacked below the status badge show live feedback:
