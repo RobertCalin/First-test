@@ -76,17 +76,23 @@ hand-tracking piece) lives in one runtime/language instead of two.
 ### Building and running
 
 Windows only (layered windows, `SendInput`, and global hotkeys are all Win32
-APIs reached via `ctypes`). Requires Python 3.10+ on Windows:
+APIs reached via `ctypes`). Requires Python 3.10+ on Windows.
 
+**First time:**
 ```
 git clone https://github.com/RobertCalin/First-test.git
 cd First-test
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-cd src
-python -m agent_overlay
 ```
+
+**Every time after that**, just double-click [`run.bat`](run.bat) (or run
+`run.bat` from a terminal in the repo root). It pulls the latest code,
+creates/updates the virtual environment and dependencies if needed, and
+launches the app -- safe to re-run any time, each step is a no-op if there's
+nothing new.
+
+(To do the same thing manually instead:
+`git pull` -> `python -m venv .venv` -> `.venv\Scripts\activate` ->
+`pip install -r requirements.txt` -> `cd src` -> `python -m agent_overlay`.)
 
 MediaPipe doesn't always support the very latest Python release the day it
 ships -- if `pip install` fails on `mediapipe`, check
