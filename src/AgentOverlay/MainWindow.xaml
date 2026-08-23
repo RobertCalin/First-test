@@ -18,12 +18,15 @@
                    Background="Transparent"
                    EditingMode="Ink" />
 
-        <!-- Avatar face, centered, eyes tracking the live mouse position (see
-             MainWindow.xaml.cs). Purely visual feedback that the agent is "watching" --
-             never hit-test visible, so it can never block clicks or drawing. -->
+        <!-- Avatar face, eyes tracking the live mouse position (see MainWindow.xaml.cs).
+             Positioned on the primary monitor in code-behind (PositionFaceOnPrimaryMonitor) --
+             centering within this Grid would center on the whole virtual desktop's bounding
+             box instead, which on a multi-monitor setup usually isn't any single screen's
+             center. Purely visual feedback that the agent is "watching"; never hit-test
+             visible, so it can never block clicks or drawing. -->
         <Grid x:Name="FaceContainer"
               Width="140" Height="140"
-              HorizontalAlignment="Center" VerticalAlignment="Center"
+              HorizontalAlignment="Left" VerticalAlignment="Top"
               IsHitTestVisible="False">
             <Ellipse x:Name="FaceHead" Fill="#DD2B2B33" Stroke="Gray" StrokeThickness="2"/>
             <Canvas>

@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         CoverVirtualScreen();
+        PositionFaceOnPrimaryMonitor();
 
         // Layered is required for real transparency; start click-through so the overlay
         // never blocks whatever is underneath until the user explicitly asks to draw.
@@ -108,6 +109,24 @@ public partial class MainWindow : Window
         Top = SystemParameters.VirtualScreenTop;
         Width = SystemParameters.VirtualScreenWidth;
         Height = SystemParameters.VirtualScreenHeight;
+    }
+
+    /// <summary>
+    /// Places the face at the center of the primary monitor (Settings &gt; Display &gt; "1"),
+    /// not the center of the virtual desktop's bounding box -- on a multi-monitor setup
+    /// those only coincide with a symmetric arrangement. The primary monitor's top-left is
+    /// always desktop-absolute (0,0), so this window's own Left/Top (the virtual desktop's
+    /// top-left, possibly negative) gives the offset into this window's local coordinates.
+    /// </summary>
+    private void PositionFaceOnPrimaryMonitor()
+    {
+        var primaryCenterX = SystemParameters.PrimaryScreenWidth / 2 - Left;
+        var primaryCenterY = SystemParameters.PrimaryScreenHeight / 2 - Top;
+
+        FaceContainer.Margin = new Thickness(
+            primaryCenterX - FaceContainer.Width / 2,
+            primaryCenterY - FaceContainer.Height / 2,
+            0, 0);
     }
 
     private void ToggleDrawMode() => SetClickThrough(clickThrough: _drawMode);

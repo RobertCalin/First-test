@@ -22,8 +22,9 @@ Source: [`src/AgentOverlay`](src/AgentOverlay).
   with no confirmation dialog to fight through.
 - A small always-visible status badge (top-right) shows which mode is active,
   so the overlay's state is never invisible to you.
-- An avatar face centered on screen with eyes that track the live mouse
-  cursor (polled via `GetCursorPos`, since click-through mode receives no
+- An avatar face centered on your **primary monitor** (Settings > Display >
+  the one marked "1"), with eyes that track the live mouse cursor across all
+  monitors (polled via `GetCursorPos`, since click-through mode receives no
   mouse events) -- a visible cue that the overlay is "watching." Its outline
   color mirrors the status badge (gray = pass-through, green = draw mode).
   Never hit-test visible, so it can't block clicks or drawing.
