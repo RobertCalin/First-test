@@ -9,7 +9,6 @@ import ctypes
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
-shcore = ctypes.WinDLL("shcore", use_last_error=True)
 
 GWL_EXSTYLE = -20
 
@@ -23,8 +22,6 @@ MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 MOD_NOREPEAT = 0x4000
-
-PROCESS_PER_MONITOR_DPI_AWARE = 2
 
 SM_CXSCREEN = 0
 SM_CYSCREEN = 1
@@ -86,17 +83,6 @@ user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
 user32.SendInput.restype = wintypes.UINT
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
-shcore.SetProcessDpiAwareness.argtypes = [ctypes.c_int]
-shcore.SetProcessDpiAwareness.restype = ctypes.c_long
-
-
-def set_per_monitor_dpi_aware() -> None:
-    """Best-effort; harmless if DPI awareness was already set elsewhere (e.g. by Qt).
-    Must be called before the Qt application is created."""
-    try:
-        shcore.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
-    except OSError:
-        pass
 
 
 def set_click_through(hwnd: int, click_through: bool) -> None:
