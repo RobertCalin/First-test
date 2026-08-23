@@ -41,6 +41,27 @@ COLOR_DRAW_MODE = QColor(0x32, 0xCD, 0x32)  # LimeGreen
 COLOR_HAND_CONTROL = QColor(0x00, 0xFF, 0xFF)  # Cyan
 COLOR_ERROR = QColor(0xFF, 0x45, 0x00)  # OrangeRed
 
+# Frame-to-frame fingertip movement smaller than this (normalized camera-space fraction)
+# reads as noise, not an intentional direction -- tune up if the label flickers between
+# directions while your hand is basically still, or down if small moves aren't registering.
+MOVEMENT_DEADZONE = 0.015
+
+GESTURE_LABELS = {
+    HandGesture.NONE: "None",
+    HandGesture.POINT: "Point",
+    HandGesture.PINCH: "Pinch",
+    HandGesture.FIST: "Fist",
+    HandGesture.OPEN_PALM: "Open",
+}
+
+
+def _classify_movement(dx: float, dy: float) -> str:
+    if abs(dx) < MOVEMENT_DEADZONE and abs(dy) < MOVEMENT_DEADZONE:
+        return "Still"
+    if abs(dx) > abs(dy):
+        return "Right" if dx > 0 else "Left"
+    return "Down" if dy > 0 else "Up"
+
 
 class OverlayWindow(QWidget):
     def __init__(self) -> None:
@@ -57,6 +78,9 @@ class OverlayWindow(QWidget):
         self._status_text = "Pass-through"
         self._status_color = COLOR_PASS_THROUGH
         self._pupil_offset = QPointF(0, 0)
+        self._prev_hand_pos: QPointF | None = None
+        self._movement_label = "—"  # em dash placeholder while no hand is tracked
+        self._action_label = "—"
         self._strokes: list[list[QPointF]] = []
         self._current_stroke: list[QPointF] | None = None
 
@@ -154,6 +178,9 @@ class OverlayWindow(QWidget):
             self._hand_tracker.stop()
             self._hand_tracker = None
             self._was_pinching = False
+            self._prev_hand_pos = None
+            self._movement_label = "—"
+            self._action_label = "—"
 
         self._update_mode_visuals()
         self.update()
@@ -161,6 +188,9 @@ class OverlayWindow(QWidget):
     def _on_hand_tracker_failed(self, message: str) -> None:
         self._hand_control_enabled = False
         self._was_pinching = False
+        self._prev_hand_pos = None
+        self._movement_label = "—"
+        self._action_label = "—"
         if self._hand_tracker is not None:
             self._hand_tracker.stop()
             self._hand_tracker = None
@@ -176,11 +206,24 @@ class OverlayWindow(QWidget):
             return
         if not frame.hand_present:
             self._was_pinching = False
+            self._prev_hand_pos = None
+            self._movement_label = "—"
+            self._action_label = "—"
             return
 
         # Mirror X: moving your hand to your right, as you face the camera, should move
         # the cursor right on screen -- matching a mirror/selfie view, not the raw frame.
+        # The movement label is classified in this same mirrored space so "Right" means
+        # what it visually looks like, not the raw unmirrored camera frame.
         mirrored_x = 1.0 - frame.cursor_x
+        current_pos = QPointF(mirrored_x, frame.cursor_y)
+
+        if self._prev_hand_pos is not None:
+            dx = current_pos.x() - self._prev_hand_pos.x()
+            dy = current_pos.y() - self._prev_hand_pos.y()
+            self._movement_label = _classify_movement(dx, dy)
+        self._prev_hand_pos = current_pos
+        self._action_label = GESTURE_LABELS[frame.gesture]
 
         primary = QGuiApplication.primaryScreen().geometry()
         x = primary.left() + int(_clamp01(mirrored_x) * primary.width())
@@ -241,7 +284,9 @@ class OverlayWindow(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         self._paint_strokes(painter)
         self._paint_face(painter)
-        self._paint_status_badge(painter)
+        badge_rect = self._paint_status_badge(painter)
+        if self._hand_control_enabled:
+            self._paint_hand_labels(painter, badge_rect)
 
     def _paint_strokes(self, painter: QPainter) -> None:
         pen = QPen(QColor(0x14, 0x14, 0x14), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -270,7 +315,7 @@ class OverlayWindow(QWidget):
             painter.setBrush(QBrush(QColor(0x20, 0x20, 0x20)))
             painter.drawEllipse(pupil_center, PUPIL_RADIUS, PUPIL_RADIUS)
 
-    def _paint_status_badge(self, painter: QPainter) -> None:
+    def _paint_status_badge(self, painter: QPainter) -> QRect:
         painter.setFont(QFont("Consolas", 10))
         metrics = painter.fontMetrics()
         padding = 8
@@ -296,6 +341,30 @@ class OverlayWindow(QWidget):
             badge_rect.height(),
         )
         painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self._status_text)
+
+        return badge_rect
+
+    def _paint_hand_labels(self, painter: QPainter, anchor_rect: QRect) -> None:
+        """Two small badges stacked below the status badge: live movement direction and
+        current gesture, while hand control is armed."""
+        painter.setFont(QFont("Consolas", 10))
+        metrics = painter.fontMetrics()
+        padding = 8
+        top = anchor_rect.bottom() + 6
+
+        for label in (f"Movement: {self._movement_label}", f"Action: {self._action_label}"):
+            text_width = metrics.horizontalAdvance(label)
+            rect = QRect(0, 0, text_width + padding * 2, metrics.height() + padding)
+            rect.moveTopRight(QPoint(anchor_rect.right(), top))
+
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(0x20, 0x20, 0x20, 0xEE)))
+            painter.drawRoundedRect(rect, 6, 6)
+
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(rect, Qt.AlignCenter, label)
+
+            top = rect.bottom() + 6
 
     # ---- shutdown ---------------------------------------------------------------
 

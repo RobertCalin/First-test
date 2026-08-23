@@ -40,8 +40,12 @@ hand-tracking piece) lives in one runtime/language instead of two.
   explicit opt-in). While armed:
   - Your index fingertip's position drives the cursor.
   - Pinching (thumb + index finger together) performs a click.
-  - `fist` and `open_palm` are detected and available in the event data but
-    not yet bound to an action.
+  - Two small badges stacked below the status badge show live feedback:
+    **Movement** (`Up`/`Down`/`Left`/`Right`/`Still`, classified from
+    frame-to-frame fingertip position) and **Action** (the current gesture:
+    `Point`/`Pinch`/`Fist`/`Open`/`None`).
+  - `fist` and `open_palm` are detected and shown in the Action label but
+    not yet bound to a control action.
   - Hand tracking (`hand_tracker.py`) runs on a background thread using
     Google's MediaPipe Tasks HandLandmarker. Unlike the old C# version, this
     now runs in-process rather than as a subprocess talking over stdout. The
