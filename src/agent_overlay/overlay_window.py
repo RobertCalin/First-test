@@ -100,6 +100,7 @@ class OverlayWindow(QWidget):
         self._status_color = COLOR_PASS_THROUGH
         self._pupil_offset = QPointF(0, 0)
         self._blink_until = 0.0
+        self._was_mouse_down = False
         self._prev_hand_pos: QPointF | None = None
         self._last_screen_pos: tuple[int, int] | None = None
         self._movement_label = "—"  # em dash placeholder while no hand is tracked
@@ -121,7 +122,7 @@ class OverlayWindow(QWidget):
         self._cover_virtual_desktop()
 
         self._eye_timer = QTimer(self)
-        self._eye_timer.timeout.connect(self._update_eye_look)
+        self._eye_timer.timeout.connect(self._on_tick)
         self._eye_timer.start(16)
 
     # ---- geometry -------------------------------------------------------
@@ -336,6 +337,9 @@ class OverlayWindow(QWidget):
 
         if is_pinching and not self._was_pinching and self._last_screen_pos is not None:
             input_injector.click_at(*self._last_screen_pos)
+            # Triggered directly, not left to _poll_mouse_click(): click_at()'s down+up
+            # pair fires back-to-back with no artificial hold (see its docstring), which
+            # could be faster than one 16ms poll tick reliably observes.
             self._blink_until = time.monotonic() + BLINK_DURATION
         self._was_pinching = is_pinching
 
@@ -354,6 +358,11 @@ class OverlayWindow(QWidget):
 
     # ---- eye tracking -----------------------------------------------------------
 
+    def _on_tick(self) -> None:
+        self._update_eye_look()
+        self._poll_mouse_click()
+        self.update()
+
     def _update_eye_look(self) -> None:
         """Points both pupils toward the current mouse position. Uses QCursor.pos()
         (Qt's own global cursor query) rather than a Win32 poll -- unlike WPF, Qt can
@@ -363,7 +372,16 @@ class OverlayWindow(QWidget):
 
         angle = math.atan2(cursor_local.y() - face_center.y(), cursor_local.x() - face_center.x())
         self._pupil_offset = QPointF(math.cos(angle) * PUPIL_RANGE, math.sin(angle) * PUPIL_RANGE)
-        self.update()
+
+    def _poll_mouse_click(self) -> None:
+        """Blinks the face on a real, physical left-click by polling the live button
+        state (GetAsyncKeyState doesn't distinguish source, so this would also catch a
+        hand-gesture click if its down+up happens to straddle a poll tick, but that's not
+        relied on -- the pinch handler triggers its own blink directly; see its comment)."""
+        is_down = native.is_left_button_down()
+        if is_down and not self._was_mouse_down:
+            self._blink_until = time.monotonic() + BLINK_DURATION
+        self._was_mouse_down = is_down
 
     # ---- drawing (Draw Mode only) -----------------------------------------------
 

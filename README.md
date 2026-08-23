@@ -46,10 +46,12 @@ hand-tracking piece) lives in one runtime/language instead of two.
     the fingertip moves too much as part of curling into a pinch/fist,
     which was making the cursor drift during those gestures) drives the
     cursor.
-  - Pinching (thumb + index finger together) performs a click, and the
-    avatar face's eyes blink briefly as visual feedback that it registered.
-    The cursor freezes in place for the duration of the pinch so the click
-    can't drag it.
+  - Pinching (thumb + index finger together) performs a click. The cursor
+    freezes in place for the duration of the pinch so the click can't drag
+    it.
+  - The avatar face blinks (eyes drawn closed briefly) on **any** left-click
+    -- a real physical click, or a hand-gesture one -- so it's a general
+    "click happened" indicator, not specific to hand control.
   - Two small badges stacked below the status badge show live feedback:
     **Movement** (`Up`/`Down`/`Left`/`Right`/`Still`, classified from
     frame-to-frame palm position) and **Action** (the current gesture:

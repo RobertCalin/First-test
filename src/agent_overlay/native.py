@@ -26,6 +26,8 @@ MOD_NOREPEAT = 0x4000
 SM_CXSCREEN = 0
 SM_CYSCREEN = 1
 
+VK_LBUTTON = 0x01
+
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 
@@ -83,6 +85,8 @@ user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
 user32.SendInput.restype = wintypes.UINT
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
 
 
 def set_click_through(hwnd: int, click_through: bool) -> None:
@@ -92,6 +96,13 @@ def set_click_through(hwnd: int, click_through: bool) -> None:
     else:
         style &= ~WS_EX_TRANSPARENT
     user32.SetWindowLongW(wintypes.HWND(hwnd), GWL_EXSTYLE, style)
+
+
+def is_left_button_down() -> bool:
+    """Live state of the physical/synthesized left mouse button, queried directly rather
+    than via a window message -- works regardless of which window (if any) has focus, and
+    doesn't distinguish a real click from one this app injected via click_at()."""
+    return bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
 
 
 def register_hotkey(hotkey_id: int, modifiers: int, vk: int) -> bool:
@@ -121,7 +132,15 @@ def move_to(x: int, y: int) -> None:
 
 
 def click_at(x: int, y: int) -> None:
-    """Moves the cursor to absolute coordinates and left-clicks there."""
+    """Moves the cursor to absolute coordinates and left-clicks there.
+
+    Deliberately does NOT add a delay between the down and up events to make the button
+    state easier to poll elsewhere (e.g. to detect this click for blink feedback) -- doing
+    that with time.sleep() here would block whatever thread calls click_at(), which for
+    hand-gesture clicks is the Qt GUI thread; stalling it, even briefly, on every click is
+    worse than the alternative. Callers that need to react to their own synthesized clicks
+    should trigger that directly at the call site instead of relying on external polling
+    to observe a state change that may be too brief to reliably catch."""
     move_to(x, y)
     down = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)
     up = MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)
