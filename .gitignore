@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+src/agent_overlay/models/
+src/agent_overlay/skills_data/

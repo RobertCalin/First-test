@@ -1,1 +1,166 @@
 # First-test
+
+## AgentOverlay
+
+A fullscreen, transparent Windows overlay that is the visual foundation for a
+desktop productivity/accessibility agent: something that sits on top of every
+other app, can be drawn on, controlled by hand gestures via webcam, and can
+(eventually) see the screen, listen for voice commands, and act across other
+applications.
+
+Source: [`src/agent_overlay`](src/agent_overlay). Pure Python (PySide6/Qt +
+ctypes for Win32 interop) -- an earlier C#/WPF version of this same app was
+replaced with this one so the whole project (including the ML-heavy
+hand-tracking piece) lives in one runtime/language instead of two.
+
+### What's implemented (Phase 1)
+
+- A fullscreen, transparent, always-on-top window covering the whole virtual
+  desktop (all monitors), hidden from the taskbar/alt-tab.
+- Click-through by default: with no input, the overlay is fully invisible to
+  clicks and they land on whatever app is beneath it.
+- **Ctrl+Alt+D** toggles **Draw Mode**, where the overlay captures mouse input
+  and you can freehand-draw directly on top of everything on screen. Pressing
+  it again returns to click-through.
+- **Ctrl+Alt+Q** is a hard kill switch: quits the app instantly, in any mode,
+  with no confirmation dialog to fight through.
+- A small always-visible status badge (top-right of your **primary monitor**)
+  shows which mode is active, so the overlay's state is never invisible to
+  you.
+- An avatar face centered on your **primary monitor** (Settings > Display >
+  the one marked "1"), with eyes that track the live mouse cursor across all
+  monitors -- a visible cue that the overlay is "watching." Its outline color
+  mirrors the status badge (gray = pass-through, green = draw mode, cyan =
+  hand control). Never intercepts clicks or drawing.
+- A global exception hook (`main.py`) shows an error dialog instead of failing
+  silently, and hotkey registration failures (e.g. Ctrl+Alt+D already bound by
+  another app) degrade to a status message instead of crashing on startup.
+- **Hand-gesture mouse control**, armed/disarmed with **Ctrl+Alt+H** (off by
+  default -- a webcam pointed at you should never move your mouse without
+  explicit opt-in). Arming it starts with a **4-second calibration**: move
+  your hand around your comfortable range of motion (the status badge counts
+  it down) so that range -- not the camera's full field of view -- gets
+  mapped to the whole screen. Re-arming (toggle off, then on) re-calibrates
+  from scratch. Once calibration finishes:
+  - Your palm's position (the middle-finger MCP joint, not the fingertip --
+    the fingertip moves too much as part of curling into a pinch/fist,
+    which was making the cursor drift during those gestures) drives the
+    cursor.
+  - Pinching (thumb + index finger together) performs a click. The cursor
+    freezes in place for the duration of the pinch so the click can't drag
+    it.
+  - The avatar face blinks (eyes drawn closed briefly) on **any** left-click
+    -- a real physical click, or a hand-gesture one -- so it's a general
+    "click happened" indicator, not specific to hand control.
+  - Two small badges stacked below the status badge show live feedback:
+    **Movement** (`Up`/`Down`/`Left`/`Right`/`Still`, classified from
+    frame-to-frame palm position) and **Action** (the current gesture:
+    `Point`/`Pinch`/`Fist`/`Open`/`None`).
+  - `fist` and `open_palm` are detected and shown in the Action label but
+    not yet bound to a control action.
+  - Hand tracking (`hand_tracker.py`) runs on a background thread using
+    Google's MediaPipe Tasks HandLandmarker. Unlike the old C# version, this
+    now runs in-process rather than as a subprocess talking over stdout. The
+    model file (~10MB) isn't bundled in the pip package -- it's downloaded
+    automatically to `src/agent_overlay/models/` the first time you arm hand
+    control, and cached there after that.
+- **Learning by demonstration, Phase 1: record and replay** (`skills.py`).
+  **Ctrl+Alt+R** starts recording your mouse (position + clicks, with
+  timing); press it again to stop, and a small dialog asks you to name the
+  recording -- it's saved to `src/agent_overlay/skills_data/<name>.json`.
+  **Ctrl+Alt+P** lists your saved recordings and replays the one you pick,
+  reproducing the original movement and click timing exactly. Recording,
+  replaying, and hand control are mutually exclusive (each refuses to start
+  while another is active, with a status message saying so) since all three
+  drive `input_injector` and would otherwise fight each other. This is pure
+  literal replay -- fixed pixel coordinates, no adaptation -- see **Next
+  steps** for where that's headed.
+
+### Learning by demonstration -- current state and where it's going
+
+Phase 1 (built): record your own mouse actions once, replay them verbatim
+later. This alone is useful for literally-repeatable tasks (the target
+window is always in the same place, the content doesn't change), but it's
+just a macro recorder -- nothing here is "learning" in any real sense yet,
+and nothing here should be pointed at a game or other service whose terms
+prohibit automating input (see the PR discussion around this feature for
+why that's a hard line, not a soft one).
+
+Phase 2 (not built): the actual "AI" part. `agent_brain.py`'s still-stub
+`AgentBrain` is where this goes -- instead of replaying a fixed (x, y), a
+real implementation would take a screenshot at each recorded step, ask an
+LLM with vision (e.g. Claude) "where is the equivalent of this recorded
+click target now," and click there instead. That's what would let a
+recorded skill survive a moved window, a resized button, or slightly
+different on-screen content, instead of breaking the moment anything shifts
+by a few pixels.
+
+### What's stubbed but not wired up
+
+- `input_injector.py` -- synthesizes mouse moves/clicks and keyboard text via
+  `SendInput`. The agent's "hands." Used by hand-gesture control above; still
+  not auto-invoked by anything else.
+- `voice_listener.py` -- interface for speech-to-text; the choice between an
+  offline engine (e.g. Whisper) and a cloud STT API is deferred.
+- `agent_brain.py` -- the decision loop interface (screenshot + voice
+  transcript in, one `AgentAction` out). This is where a call to an LLM (e.g.
+  Claude, with vision) will eventually live. Actions are data, not side
+  effects, so each one can be logged and, for anything destructive, confirmed
+  before `input_injector` executes it.
+
+### Next steps (roadmap, not yet built)
+
+1. Screen capture feeding `AgentContext`.
+2. A real `VoiceListener` implementation + a push-to-talk or wake-word hotkey.
+3. A real `AgentBrain` calling an LLM to turn (screenshot, voice command) into
+   an `AgentAction` -- and, per the learning-by-demonstration section above,
+   to generalize a recorded skill's replay via vision instead of fixed
+   coordinates.
+4. A confirmation/logging layer between the brain's decisions and
+   `input_injector` actually executing them, especially for anything
+   destructive (submitting forms, deleting, sending messages).
+5. Bind `fist`/`open_palm` gestures to additional actions (e.g. drag, or
+   toggling pass-through), and smooth/debounce the cursor position -- it
+   currently follows the raw fingertip position 1:1, which will feel jittery.
+6. Keyboard events (typed text, not just mouse) in recorded skills.
+
+### Building and running
+
+Windows only (layered windows, `SendInput`, and global hotkeys are all Win32
+APIs reached via `ctypes`). Requires Python 3.10+ on Windows.
+
+**First time:**
+```
+git clone https://github.com/RobertCalin/First-test.git
+cd First-test
+```
+
+**Every time after that**, just double-click [`run.bat`](run.bat) (or run
+`run.bat` from a terminal in the repo root). It pulls the latest code,
+creates/updates the virtual environment and dependencies if needed, and
+launches the app -- safe to re-run any time, each step is a no-op if there's
+nothing new.
+
+(To do the same thing manually instead:
+`git pull` -> `python -m venv .venv` -> `.venv\Scripts\activate` ->
+`pip install -r requirements.txt` -> `cd src` -> `python -m agent_overlay`.)
+
+MediaPipe doesn't always support the very latest Python release the day it
+ships -- if `pip install` fails on `mediapipe`, check
+https://pypi.org/project/mediapipe/ for its currently supported Python
+versions, or use Python 3.11/3.12.
+
+Controls once it's running:
+- `Ctrl+Alt+D` -- toggle Draw Mode
+- `Ctrl+Alt+H` -- arm/disarm hand-gesture mouse control (needs a working
+  webcam; the status badge will show a specific error if the camera or
+  MediaPipe/OpenCV aren't available)
+- `Ctrl+Alt+R` -- start/stop recording a mouse skill (prompts for a name when
+  you stop)
+- `Ctrl+Alt+P` -- pick and replay a saved skill
+- `Ctrl+Alt+Q` -- quit (also the only clean way to close it, since there's no
+  window chrome or taskbar icon)
+
+If it seems stuck with no way to close it: open Task Manager
+(`Ctrl+Shift+Esc`) -> find the Python process running `agent_overlay` -> End
+Task.
