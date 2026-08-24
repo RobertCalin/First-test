@@ -64,6 +64,36 @@ hand-tracking piece) lives in one runtime/language instead of two.
     model file (~10MB) isn't bundled in the pip package -- it's downloaded
     automatically to `src/agent_overlay/models/` the first time you arm hand
     control, and cached there after that.
+- **Learning by demonstration, Phase 1: record and replay** (`skills.py`).
+  **Ctrl+Alt+R** starts recording your mouse (position + clicks, with
+  timing); press it again to stop, and a small dialog asks you to name the
+  recording -- it's saved to `src/agent_overlay/skills_data/<name>.json`.
+  **Ctrl+Alt+P** lists your saved recordings and replays the one you pick,
+  reproducing the original movement and click timing exactly. Recording,
+  replaying, and hand control are mutually exclusive (each refuses to start
+  while another is active, with a status message saying so) since all three
+  drive `input_injector` and would otherwise fight each other. This is pure
+  literal replay -- fixed pixel coordinates, no adaptation -- see **Next
+  steps** for where that's headed.
+
+### Learning by demonstration -- current state and where it's going
+
+Phase 1 (built): record your own mouse actions once, replay them verbatim
+later. This alone is useful for literally-repeatable tasks (the target
+window is always in the same place, the content doesn't change), but it's
+just a macro recorder -- nothing here is "learning" in any real sense yet,
+and nothing here should be pointed at a game or other service whose terms
+prohibit automating input (see the PR discussion around this feature for
+why that's a hard line, not a soft one).
+
+Phase 2 (not built): the actual "AI" part. `agent_brain.py`'s still-stub
+`AgentBrain` is where this goes -- instead of replaying a fixed (x, y), a
+real implementation would take a screenshot at each recorded step, ask an
+LLM with vision (e.g. Claude) "where is the equivalent of this recorded
+click target now," and click there instead. That's what would let a
+recorded skill survive a moved window, a resized button, or slightly
+different on-screen content, instead of breaking the moment anything shifts
+by a few pixels.
 
 ### What's stubbed but not wired up
 
@@ -83,13 +113,16 @@ hand-tracking piece) lives in one runtime/language instead of two.
 1. Screen capture feeding `AgentContext`.
 2. A real `VoiceListener` implementation + a push-to-talk or wake-word hotkey.
 3. A real `AgentBrain` calling an LLM to turn (screenshot, voice command) into
-   an `AgentAction`.
+   an `AgentAction` -- and, per the learning-by-demonstration section above,
+   to generalize a recorded skill's replay via vision instead of fixed
+   coordinates.
 4. A confirmation/logging layer between the brain's decisions and
    `input_injector` actually executing them, especially for anything
    destructive (submitting forms, deleting, sending messages).
 5. Bind `fist`/`open_palm` gestures to additional actions (e.g. drag, or
    toggling pass-through), and smooth/debounce the cursor position -- it
    currently follows the raw fingertip position 1:1, which will feel jittery.
+6. Keyboard events (typed text, not just mouse) in recorded skills.
 
 ### Building and running
 
@@ -122,6 +155,9 @@ Controls once it's running:
 - `Ctrl+Alt+H` -- arm/disarm hand-gesture mouse control (needs a working
   webcam; the status badge will show a specific error if the camera or
   MediaPipe/OpenCV aren't available)
+- `Ctrl+Alt+R` -- start/stop recording a mouse skill (prompts for a name when
+  you stop)
+- `Ctrl+Alt+P` -- pick and replay a saved skill
 - `Ctrl+Alt+Q` -- quit (also the only clean way to close it, since there's no
   window chrome or taskbar icon)
 

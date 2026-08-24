@@ -19,9 +19,10 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QInputDialog, QWidget
 
 from . import input_injector, native
+from . import skills as skills_module
 from .agent_brain import StubAgentBrain
 from .global_hotkey import GlobalHotkeys
 from .hand_tracker import HandFrame, HandGesture, HandTrackerThread
@@ -29,6 +30,8 @@ from .hand_tracker import HandFrame, HandGesture, HandTrackerThread
 VK_D = 0x44
 VK_Q = 0x51
 VK_H = 0x48
+VK_R = 0x52
+VK_P = 0x50
 
 FACE_SIZE = 140
 EYE_OFFSET_X = 25
@@ -41,6 +44,7 @@ COLOR_PASS_THROUGH = QColor(0x80, 0x80, 0x80)
 COLOR_DRAW_MODE = QColor(0x32, 0xCD, 0x32)  # LimeGreen
 COLOR_HAND_CONTROL = QColor(0x00, 0xFF, 0xFF)  # Cyan
 COLOR_ERROR = QColor(0xFF, 0x45, 0x00)  # OrangeRed
+COLOR_RECORDING = QColor(0xFF, 0x3B, 0x30)  # Red
 
 # How long the face's eyes stay drawn closed after a click, as visual feedback that a
 # pinch registered.
@@ -119,6 +123,11 @@ class OverlayWindow(QWidget):
         # Not wired to anything yet -- see agent_brain.py.
         self._agent_brain = StubAgentBrain()
 
+        self._recording = False
+        self._replaying = False
+        self._skill_recorder = skills_module.SkillRecorder()
+        self._replay_thread: skills_module.SkillReplayThread | None = None
+
         self._cover_virtual_desktop()
 
         self._eye_timer = QTimer(self)
@@ -184,6 +193,12 @@ class OverlayWindow(QWidget):
         if self._hotkeys.register(native.MOD_CONTROL | native.MOD_ALT, VK_H, self._toggle_hand_control) is None:
             self._status_text = "Ctrl+Alt+H unavailable (in use by another app)"
 
+        if self._hotkeys.register(native.MOD_CONTROL | native.MOD_ALT, VK_R, self._toggle_recording) is None:
+            self._status_text = "Ctrl+Alt+R unavailable (in use by another app)"
+
+        if self._hotkeys.register(native.MOD_CONTROL | native.MOD_ALT, VK_P, self._open_replay_picker) is None:
+            self._status_text = "Ctrl+Alt+P unavailable (in use by another app)"
+
         self.update()
 
     def _kill_switch(self) -> None:
@@ -196,7 +211,19 @@ class OverlayWindow(QWidget):
 
     # ---- hand control -------------------------------------------------------
 
+    def _automation_busy(self) -> bool:
+        """True if some other automatic-input mechanism is already active. Recording,
+        replaying a skill, and hand control all drive input_injector; running two at once
+        would just fight each other, so each one's "start" path checks this first (never
+        the "stop" path -- turning something off must always be allowed)."""
+        return self._hand_control_enabled or self._recording or self._replaying
+
     def _toggle_hand_control(self) -> None:
+        if not self._hand_control_enabled and (self._recording or self._replaying):
+            self._status_text = "Can't arm hand control while recording/replaying a skill"
+            self.update()
+            return
+
         self._hand_control_enabled = not self._hand_control_enabled
 
         if self._hand_control_enabled:
@@ -346,6 +373,12 @@ class OverlayWindow(QWidget):
     # ---- mode visuals ---------------------------------------------------------
 
     def _update_mode_visuals(self) -> None:
+        # Recording/replaying own their own status message (set where they start/stop) --
+        # skip here so an unrelated toggle (e.g. Ctrl+Alt+D, which has no busy-guard)
+        # can't silently overwrite "Recording..."/"Replaying..." while one is active.
+        if self._recording or self._replaying:
+            return
+
         if self._hand_control_enabled:
             self._status_text = "Hand Control ON (Ctrl+Alt+H to stop)"
             self._status_color = COLOR_HAND_CONTROL
@@ -361,6 +394,8 @@ class OverlayWindow(QWidget):
     def _on_tick(self) -> None:
         self._update_eye_look()
         self._poll_mouse_click()
+        if self._recording:
+            self._poll_recording()
         self.update()
 
     def _update_eye_look(self) -> None:
@@ -382,6 +417,84 @@ class OverlayWindow(QWidget):
         if is_down and not self._was_mouse_down:
             self._blink_until = time.monotonic() + BLINK_DURATION
         self._was_mouse_down = is_down
+
+    # ---- skill recording / replay -----------------------------------------------
+
+    def _poll_recording(self) -> None:
+        """Feeds the live cursor position (primary-monitor-relative, matching what
+        native.move_to/click_at expect) to the recorder every tick while active."""
+        primary = QGuiApplication.primaryScreen().geometry()
+        cursor = QCursor.pos()
+        self._skill_recorder.poll(cursor.x() - primary.left(), cursor.y() - primary.top())
+
+    def _toggle_recording(self) -> None:
+        if not self._recording and self._automation_busy():
+            self._status_text = "Can't record while hand control/replay is active"
+            self.update()
+            return
+
+        if not self._recording:
+            self._recording = True
+            self._skill_recorder.start()
+            self._status_text = "Recording... (Ctrl+Alt+R to stop and save)"
+            self._status_color = COLOR_RECORDING
+        else:
+            self._recording = False
+            # Modal dialog: briefly takes focus, but this is an explicit, deliberate
+            # user action (they just pressed the stop-recording hotkey), not something
+            # that happens on its own -- consistent with every other control here being
+            # opt-in and visible.
+            name, ok = QInputDialog.getText(self, "Save Skill", "Name this recorded skill:")
+            # Reset color/text to the current baseline mode first (now that _recording is
+            # False, this actually takes effect -- see its own early-return guard), then
+            # overwrite just the text with the save outcome so it isn't immediately
+            # clobbered the way the hotkey-conflict and hand-tracker-failure messages
+            # were before this same ordering was fixed for them.
+            self._update_mode_visuals()
+            if ok and name.strip():
+                path = self._skill_recorder.save(name.strip())
+                self._status_text = f"Saved skill: {path.stem}"
+            else:
+                self._status_text = "Recording discarded (no name given)"
+
+        self.update()
+
+    def _open_replay_picker(self) -> None:
+        if self._automation_busy():
+            self._status_text = "Can't replay while hand control/recording is active"
+            self.update()
+            return
+
+        names = skills_module.list_skills()
+        if not names:
+            self._status_text = "No saved skills yet (Ctrl+Alt+R to record one)"
+            self.update()
+            return
+
+        name, ok = QInputDialog.getItem(self, "Replay Skill", "Choose a skill:", names, editable=False)
+        if ok and name:
+            self._start_replay(name)
+
+    def _start_replay(self, name: str) -> None:
+        events = skills_module.load_skill(name)
+        if not events:
+            self._status_text = f"Skill '{name}' has no recorded events"
+            self.update()
+            return
+
+        self._replaying = True
+        self._replay_thread = skills_module.SkillReplayThread(events)
+        self._replay_thread.finished.connect(self._on_replay_finished)
+        self._status_text = f"Replaying: {name} (Ctrl+Alt+Q to stop everything)"
+        self._status_color = COLOR_HAND_CONTROL
+        self.update()
+        self._replay_thread.start()
+
+    def _on_replay_finished(self) -> None:
+        self._replaying = False
+        self._replay_thread = None
+        self._update_mode_visuals()
+        self.update()
 
     # ---- drawing (Draw Mode only) -----------------------------------------------
 
@@ -505,6 +618,8 @@ class OverlayWindow(QWidget):
         self._hotkeys.unregister_all()
         if self._hand_tracker is not None:
             self._hand_tracker.stop()
+        if self._replay_thread is not None:
+            self._replay_thread.wait(2000)
         super().closeEvent(event)
 
 
